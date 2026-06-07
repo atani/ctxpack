@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ctxpack"
+version = "0.1.0"
+description = "Token-aware context extractor for AI agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Akira Taniwaki" }]
+keywords = ["ai-agents", "llm", "tokens", "context", "markdown", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Text Processing :: Markup :: Markdown",
+]
+
+[project.urls]
+Homepage = "https://github.com/atani/ctxpack"
+Repository = "https://github.com/atani/ctxpack"
+Issues = "https://github.com/atani/ctxpack/issues"
+
+[project.scripts]
+ctxpack = "ctxpack.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ctxpack"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

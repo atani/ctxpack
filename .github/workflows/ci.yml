@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install ${{ matrix.python-version }}
+      - name: Run tests
+        run: uv run --python ${{ matrix.python-version }} --with pytest pytest -q
+      - name: Smoke test CLI
+        run: |
+          uv run --python ${{ matrix.python-version }} ctxpack tests/fixture.html --stats
+          uv run --python ${{ matrix.python-version }} ctxpack stats
