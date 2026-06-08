@@ -83,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError) as exc:
         print(f"ctxpack: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # pragma: no cover - unexpected runtime errors
+        print(f"ctxpack: {exc}", file=sys.stderr)
+        return 1
 
     if not args.no_record:
         record_run(result)
