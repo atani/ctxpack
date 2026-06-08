@@ -7,6 +7,7 @@ from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import URLError
 
+from . import __version__
 from .core import (
     history_table,
     load_history,
@@ -24,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ctxpack",
         description="Token-aware context extractor for AI agents.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("source", nargs="?", help="URL, local HTML/Markdown file, '-' for stdin, or command: stats/reset")
     parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--query", help="Move sections related to this task toward the top")
