@@ -216,3 +216,11 @@ def test_fetch_url_rejects_declared_oversize(monkeypatch):
     monkeypatch.setattr(core, "urlopen", lambda *a, **k: resp)
     with pytest.raises(ValueError):
         core.fetch_url("https://example.com/declared")
+
+
+def test_read_source_rejects_oversized_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "MAX_FILE_SIZE", 8)
+    big = tmp_path / "big.html"
+    big.write_text("x" * 100, encoding="utf-8")
+    with pytest.raises(ValueError):
+        core.read_source(str(big))

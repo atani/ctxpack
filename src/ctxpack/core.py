@@ -185,9 +185,13 @@ def read_source(source: str) -> tuple[str, str]:
     if re.match(r"https?://", source):
         return source, fetch_url(source)
     path = Path(source)
-    if path.is_file() and path.stat().st_size > MAX_FILE_SIZE:
-        raise ValueError(f"file too large: {path.stat().st_size} bytes (limit {MAX_FILE_SIZE})")
-    return str(path), path.read_text(encoding="utf-8", errors="replace")
+    # Cap the read so the size limit also applies to special files (e.g.
+    # /dev/zero, FIFOs) whose length cannot be learned from stat().
+    with path.open("rb") as f:
+        raw = f.read(MAX_FILE_SIZE + 1)
+    if len(raw) > MAX_FILE_SIZE:
+        raise ValueError(f"file too large: exceeds {MAX_FILE_SIZE} bytes")
+    return str(path), raw.decode("utf-8", errors="replace")
 
 
 def html_to_markdown(html: str) -> tuple[str | None, str]:
