@@ -124,6 +124,17 @@ def _pack_stdin(text: str, monkeypatch):
     return pack("-")
 
 
+def test_cli_version_flag(capsys):
+    import pytest as _pytest
+
+    from ctxpack import __version__
+
+    with _pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert __version__ in capsys.readouterr().out
+
+
 def test_estimate_tokens_handles_empty_and_cjk():
     assert estimate_tokens("") == 0
     # Pure CJK text uses the ~0.8-per-character factor.

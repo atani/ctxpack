@@ -93,7 +93,15 @@ Skip recording one run:
 ctxpack https://example.com --no-record
 ```
 
-## Install from source
+## Install
+
+### Homebrew
+
+```bash
+brew install atani/tap/ctxpack
+```
+
+### From source
 
 ```bash
 git clone https://github.com/atani/ctxpack.git
