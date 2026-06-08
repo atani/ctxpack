@@ -3,4 +3,4 @@
 from .core import PackResult, pack
 
 __all__ = ["PackResult", "pack"]
-__version__ = "0.1.0"  # x-release-please-version
+__version__ = "0.2.0"  # x-release-please-version
