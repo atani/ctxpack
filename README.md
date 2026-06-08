@@ -1,5 +1,7 @@
 # CtxPack
 
+[日本語](README.ja.md)
+
 **Token-aware context extraction for AI agents.**
 
 CtxPack turns noisy web pages, HTML, or Markdown into compact context that agents can safely consume. It removes obvious page chrome, preserves useful structure, and tracks cumulative token savings over time.
