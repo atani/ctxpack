@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from urllib.error import URLError
 
 from .core import (
     history_table,
@@ -73,7 +74,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = pack(args.source, query=args.query)
-    except Exception as exc:  # pragma: no cover - exact network errors vary
+    except (URLError, TimeoutError, ConnectionError) as exc:
+        print(f"ctxpack: network error (retriable): {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"ctxpack: file not found: {exc.filename or exc}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as exc:
         print(f"ctxpack: {exc}", file=sys.stderr)
         return 1
 
