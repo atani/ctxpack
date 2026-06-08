@@ -17,11 +17,27 @@ BLOCK_TAGS = {
     "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
 }
 DROP_TAGS = {"script", "style", "noscript", "svg", "canvas", "iframe"}
+HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+# Void elements have no end tag, so they must never change nesting/skip depth.
+VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+}
 DROP_CLASS_ID_HINTS = (
     "ad", "ads", "advert", "banner", "breadcrumb", "cookie", "footer", "header",
     "menu", "modal", "nav", "newsletter", "promo", "recommend", "related", "share",
     "sidebar", "social", "subscribe", "tracking",
 )
+
+# Guard against memory exhaustion from very large remote responses or local files.
+MAX_FETCH_SIZE = 50 * 1024 * 1024
+MAX_FILE_SIZE = 100 * 1024 * 1024
+
+# Pre-compiled patterns reused across every run.
+_CJK_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+_SECTION_SPLIT_PATTERN = re.compile(r"(?=^#{1,6} .*$)", flags=re.MULTILINE)
+_WORD_PATTERN = re.compile(r"\w+")
 
 
 @dataclass
@@ -72,20 +88,24 @@ class ReadabilityHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title_parts: list[str] = []
-        self.stack: list[str] = []
+        # skip_depth counts how many open, droppable (non-void) tags we are
+        # nested inside. Void tags never touch it because they have no end tag.
         self.skip_depth = 0
         self.in_title = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
-        attrs_dict = {k.lower(): (v or "") for k, v in attrs}
-        self.stack.append(tag)
         if tag == "title":
             self.in_title = True
+        if tag in VOID_TAGS:
+            if not self.skip_depth and tag in BLOCK_TAGS:
+                self.parts.append("\n")
+            return
+        attrs_dict = {k.lower(): (v or "") for k, v in attrs}
         if self.skip_depth or tag in DROP_TAGS or self._looks_noisy(tag, attrs_dict):
             self.skip_depth += 1
             return
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        if tag in HEADING_TAGS:
             level = int(tag[1])
             self.parts.append("\n" + "#" * level + " ")
         elif tag == "li":
@@ -97,12 +117,12 @@ class ReadabilityHTMLParser(HTMLParser):
         tag = tag.lower()
         if tag == "title":
             self.in_title = False
+        if tag in VOID_TAGS:
+            return
         if self.skip_depth:
             self.skip_depth -= 1
         elif tag in BLOCK_TAGS:
             self.parts.append("\n")
-        if self.stack:
-            self.stack.pop()
 
     def handle_data(self, data: str) -> None:
         text = data.strip()
@@ -110,6 +130,7 @@ class ReadabilityHTMLParser(HTMLParser):
             return
         if self.in_title:
             self.title_parts.append(text)
+            return
         if self.skip_depth:
             return
         self.parts.append(text + " ")
@@ -132,10 +153,15 @@ class ReadabilityHTMLParser(HTMLParser):
 
 
 def estimate_tokens(text: str) -> int:
-    """Fast model-agnostic token estimate suitable for before/after comparison."""
+    """Fast model-agnostic token estimate suitable for before/after comparison.
+
+    Heuristic: CJK characters count as ~0.8 tokens each, everything else as
+    ~1 token per 4 characters. This is an approximation for relative
+    before/after savings, not an exact per-model token count.
+    """
     if not text:
         return 0
-    cjk = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff]", text))
+    cjk = len(_CJK_PATTERN.findall(text))
     non_cjk = len(text) - cjk
     return max(1, round(non_cjk / 4 + cjk * 0.8))
 
@@ -143,7 +169,12 @@ def estimate_tokens(text: str) -> int:
 def fetch_url(url: str, timeout: int = 20) -> str:
     req = Request(url, headers={"User-Agent": "ctxpack/0.1 (+https://github.com/atani/ctxpack)"})
     with urlopen(req, timeout=timeout) as res:
-        raw = res.read()
+        declared = res.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > MAX_FETCH_SIZE:
+            raise ValueError(f"response too large: {declared} bytes (limit {MAX_FETCH_SIZE})")
+        raw = res.read(MAX_FETCH_SIZE + 1)
+        if len(raw) > MAX_FETCH_SIZE:
+            raise ValueError(f"response exceeds {MAX_FETCH_SIZE} bytes")
         encoding = res.headers.get_content_charset() or "utf-8"
     return raw.decode(encoding, errors="replace")
 
@@ -154,7 +185,13 @@ def read_source(source: str) -> tuple[str, str]:
     if re.match(r"https?://", source):
         return source, fetch_url(source)
     path = Path(source)
-    return str(path), path.read_text(encoding="utf-8", errors="replace")
+    # Cap the read so the size limit also applies to special files (e.g.
+    # /dev/zero, FIFOs) whose length cannot be learned from stat().
+    with path.open("rb") as f:
+        raw = f.read(MAX_FILE_SIZE + 1)
+    if len(raw) > MAX_FILE_SIZE:
+        raise ValueError(f"file too large: exceeds {MAX_FILE_SIZE} bytes")
+    return str(path), raw.decode("utf-8", errors="replace")
 
 
 def html_to_markdown(html: str) -> tuple[str | None, str]:
@@ -164,7 +201,7 @@ def html_to_markdown(html: str) -> tuple[str | None, str]:
 
 
 def normalize_inline(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return _WHITESPACE_PATTERN.sub(" ", text).strip()
 
 
 def normalize_text(text: str) -> str:
@@ -177,17 +214,29 @@ def normalize_text(text: str) -> str:
 
 
 def split_sections(markdown: str) -> list[str]:
-    chunks = re.split(r"(?=^#{1,6} .*$)", markdown, flags=re.MULTILINE)
+    chunks = _SECTION_SPLIT_PATTERN.split(markdown)
     sections = [c.strip() for c in chunks if c.strip()]
     if not sections:
         return [p.strip() for p in markdown.split("\n\n") if p.strip()]
     return sections
 
 
+def _query_terms(query: str) -> list[str]:
+    return [t.lower() for t in _WORD_PATTERN.findall(query) if len(t) >= 2]
+
+
 def score_section(section: str, query: str | None) -> float:
+    """Score a section's relevance to query by case-insensitive substring matches.
+
+    Body matches score +2 each (overlaps counted); terms appearing in a leading
+    heading score an extra +3. No stemming or semantic matching is performed.
+    """
     if not query:
         return 0.0
-    terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) >= 2]
+    return _score_section_terms(section, _query_terms(query))
+
+
+def _score_section_terms(section: str, terms: list[str]) -> float:
     haystack = section.lower()
     score = 0.0
     for term in terms:
@@ -199,13 +248,18 @@ def score_section(section: str, query: str | None) -> float:
 
 
 def apply_query(markdown: str, query: str | None) -> str:
-    """Move likely relevant sections first while keeping the full compact context."""
+    """Move likely relevant sections first while keeping the full compact context.
+
+    Sections are reordered by descending relevance score; ties keep their
+    original document order (the sort is stable). All content is preserved.
+    """
     if not query:
         return markdown
     sections = split_sections(markdown)
     if len(sections) <= 1:
         return markdown
-    scored = [(score_section(section, query), idx, section) for idx, section in enumerate(sections)]
+    terms = _query_terms(query)
+    scored = [(_score_section_terms(section, terms), idx, section) for idx, section in enumerate(sections)]
     relevant = [(score, idx, section) for score, idx, section in scored if score > 0]
     if not relevant:
         return markdown

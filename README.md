@@ -126,9 +126,62 @@ Options:
 
 - `--query TEXT` — move task-relevant sections toward the top.
 - `--json` — structured output for agent tool calls.
-- `--stats` — include per-run token savings in Markdown output.
+- `--stats` — include the per-run token savings table in Markdown output. JSON output always includes `stats`, so this flag only affects Markdown.
 - `--no-record` — do not add this run to cumulative savings.
 - `-o FILE` — write output to a file.
+
+Exit codes:
+
+- `0` — success.
+- `1` — runtime error such as a network failure or an oversized response (often retriable).
+- `2` — usage error or missing input file (not retriable).
+
+## How it works
+
+### Content filtering
+
+CtxPack removes, before extracting text:
+
+- `<script>`, `<style>`, `<noscript>`, `<svg>`, `<canvas>`, `<iframe>` (dropped entirely).
+- `<nav>`, `<footer>`, `<aside>` elements.
+- Elements whose `class`, `id`, or `role` contains one of these whitespace/punctuation-delimited keywords (case-insensitive): `ad`, `ads`, `advert`, `banner`, `breadcrumb`, `cookie`, `footer`, `header`, `menu`, `modal`, `nav`, `newsletter`, `promo`, `recommend`, `related`, `share`, `sidebar`, `social`, `subscribe`, `tracking`.
+
+Matching is keyword-based, so a class like `site-nav-primary` is treated as noise (`nav`), while `navigation` is kept. If useful content is dropped, save the page to a local file and inspect what `ctxpack file.html` preserves.
+
+### Token estimation
+
+Token counts are a fast, model-agnostic approximation, not exact per-model counts:
+
+- CJK characters (common Hiragana/Katakana and CJK Unified Ideographs blocks) count as ~0.8 tokens each.
+- All other characters count as ~1 token per 4 characters.
+
+This is designed for relative before/after comparison. Absolute numbers will differ from any specific tokenizer, and rare ideographs (e.g. CJK Extension B and above) and emoji fall back to the non-CJK estimate.
+
+### Query matching
+
+`--query` reorders sections by a simple relevance score while keeping all content:
+
+- Words of 2+ characters are matched case-insensitively (no stemming, lemmatization, or synonyms).
+- Each body match scores +2; a term appearing in a section's leading heading scores an extra +3.
+- Sections are sorted by descending score; ties keep their original document order.
+
+### Network behavior
+
+- **Timeout:** URL fetches time out after 20 seconds.
+- **Encoding:** the response's declared charset is used, defaulting to UTF-8. Invalid bytes are replaced with U+FFFD rather than failing.
+- **Size limit:** responses over 50 MB (and local files over 100 MB) are rejected to avoid memory exhaustion.
+- **User-Agent:** `ctxpack/0.1 (+https://github.com/atani/ctxpack)`.
+
+## Limitations
+
+CtxPack 0.1 targets static HTML/Markdown content. Out of scope for now:
+
+- JavaScript-rendered pages (single-page apps, lazy-loaded content).
+- Heavy bot protection / CAPTCHA pages.
+- Login-only content.
+- PDF, DOCX, and other binary formats (pre-convert to HTML/Markdown).
+
+For HTML vs. Markdown on stdin, the format is auto-detected by the presence of angle brackets; pass a `.md`/`.html` file path when you need deterministic handling.
 
 ## Design principles
 
@@ -141,7 +194,7 @@ Options:
 
 ## Current status
 
-Early MVP. The current implementation intentionally uses Python standard library only. It works best for article/docs-like pages and local HTML. JavaScript-rendered pages, heavy bot protection, and login-only content are out of scope for the initial version.
+Early MVP. The current implementation intentionally uses Python standard library only. It works best for article/docs-like pages and local HTML. See [Limitations](#limitations) for what is out of scope in this version.
 
 ## Roadmap
 

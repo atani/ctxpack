@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from http.client import IncompleteRead
 from pathlib import Path
+from urllib.error import URLError
 
 from .core import (
     history_table,
@@ -73,7 +75,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = pack(args.source, query=args.query)
-    except Exception as exc:  # pragma: no cover - exact network errors vary
+    except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
+        print(f"ctxpack: network error (retriable): {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"ctxpack: file not found: {exc.filename or exc}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as exc:
+        print(f"ctxpack: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # pragma: no cover - unexpected runtime errors
         print(f"ctxpack: {exc}", file=sys.stderr)
         return 1
 
@@ -89,7 +100,11 @@ def main(argv: list[str] | None = None) -> int:
             output += "\n## Token savings for this run\n\n```text\n" + stats_table(result) + "```\n"
 
     if args.output:
-        Path(args.output).write_text(output, encoding="utf-8")
+        try:
+            Path(args.output).write_text(output, encoding="utf-8")
+        except OSError as exc:
+            print(f"ctxpack: cannot write output: {exc}", file=sys.stderr)
+            return 1
     else:
         print(output, end="")
     return 0
