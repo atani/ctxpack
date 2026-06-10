@@ -101,19 +101,33 @@ ctxpack https://example.com --no-record
 brew install atani/tap/ctxpack
 ```
 
+### Windows / winget
+
+次回リリースが Windows Package Manager community repository に取り込まれた後は、次でインストールできます。
+
+```powershell
+winget install atani.ctxpack
+```
+
+このリポジトリは Windows 向けリリース成果物と `packaging/winget/` の winget マニフェストテンプレートを含みます。
+
 ### ソースから
 
 ```bash
 git clone https://github.com/atani/ctxpack.git
 cd ctxpack
-uv tool install .
+go install ./cmd/ctxpack
 ```
 
 開発中に実行する場合。
 
 ```bash
-uv run ctxpack https://example.com --stats
+go run ./cmd/ctxpack https://example.com --stats
 ```
+
+### Python 版からの移行
+
+v0.2.x までの ctxpack は Python パッケージでした。CLI（フラグ・サブコマンド・終了コード・JSON スキーマ）と `~/.ctxpack/stats.jsonl` の履歴形式は変わらないため、既存のスクリプトと履歴はそのまま動きます。Python ライブラリ API（`from ctxpack import pack`）は廃止されたので、`pip` / `uv tool install` でインストールしていた場合は上記のいずれかの方法に切り替えてください。
 
 ## CLI リファレンス
 
@@ -178,7 +192,7 @@ ctxpack reset --yes
 - **タイムアウト：** URL フェッチは 20 秒でタイムアウト
 - **エンコーディング：** レスポンスで宣言された文字セットを使用、デフォルトは UTF-8。無効なバイトは U+FFFD で置換
 - **サイズ制限：** 50 MB 超のレスポンス（ローカルファイルは 100 MB 超）はメモリ枯渇防止のため拒否
-- **User-Agent：** `ctxpack/0.1 (+https://github.com/atani/ctxpack)`
+- **User-Agent：** `ctxpack (+https://github.com/atani/ctxpack)`
 
 ## 制限事項
 

@@ -4,16 +4,20 @@ on:
   push:
     branches: [main]
 
+# Top-level permissions are read-only; each job requests only what it needs.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -26,15 +30,66 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-      - name: Build sdist and wheel
-        run: uv build
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - name: Build release binaries
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Fail fast on anything that is not a plain semver-ish version, both
+          # to catch upstream surprises and to keep the sed templating below safe.
+          if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "unexpected version format: ${VERSION}" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="ctxpack_${VERSION}_${os}_${arch}"
+            ext=""
+            if [ "$os" = "windows" ]; then ext=".exe"; fi
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/${name}/ctxpack${ext}" ./cmd/ctxpack
+            cp README.md LICENSE "dist/${name}/"
+            (cd "dist/${name}" && python3 -m zipfile -c "../${name}.zip" .)
+            rm -rf "dist/${name}"
+          done
+      - name: Generate winget manifests
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/winget/atani/ctxpack/${VERSION}"
+          URL_X64="https://github.com/atani/ctxpack/releases/download/${TAG}/ctxpack_${VERSION}_windows_amd64.zip"
+          SHA_X64=$(sha256sum "dist/ctxpack_${VERSION}_windows_amd64.zip" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+          URL_ARM64="https://github.com/atani/ctxpack/releases/download/${TAG}/ctxpack_${VERSION}_windows_arm64.zip"
+          SHA_ARM64=$(sha256sum "dist/ctxpack_${VERSION}_windows_arm64.zip" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+          sed \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s#__INSTALLER_URL_X64__#${URL_X64}#g" \
+            -e "s/__INSTALLER_SHA256_X64__/${SHA_X64}/g" \
+            -e "s#__INSTALLER_URL_ARM64__#${URL_ARM64}#g" \
+            -e "s/__INSTALLER_SHA256_ARM64__/${SHA_ARM64}/g" \
+            packaging/winget/ctxpack.installer.yaml.template > "dist/winget/atani/ctxpack/${VERSION}/atani.ctxpack.installer.yaml"
+          sed -e "s/__VERSION__/${VERSION}/g" packaging/winget/ctxpack.locale.en-US.yaml.template > "dist/winget/atani/ctxpack/${VERSION}/atani.ctxpack.locale.en-US.yaml"
+          sed -e "s/__VERSION__/${VERSION}/g" packaging/winget/ctxpack.yaml.template > "dist/winget/atani/ctxpack/${VERSION}/atani.ctxpack.yaml"
+          (cd dist/winget && python3 -m zipfile -c "../ctxpack_${VERSION}_winget_manifests.zip" .)
+          # Checksums cover every release zip, including the winget manifests
+          # archive generated just above.
+          (cd dist && sha256sum *.zip > checksums.txt)
       - name: Attach distributions to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" dist/*.zip dist/checksums.txt
 
   publish-homebrew:
     name: Update Homebrew formula
@@ -59,14 +114,13 @@ jobs:
           path: homebrew-tap
       - name: Generate formula
         if: steps.check.outputs.skip != 'true'
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          TAG="${{ needs.release-please.outputs.tag_name }}"
           TARBALL="https://github.com/atani/ctxpack/archive/refs/tags/${TAG}.tar.gz"
           SHA=$(curl -fsSL "$TARBALL" | sha256sum | cut -d' ' -f1)
           cat > homebrew-tap/Formula/ctxpack.rb << FORMULA
           class Ctxpack < Formula
-            include Language::Python::Virtualenv
-
             desc "Token-aware context extraction for AI agents"
             homepage "https://github.com/atani/ctxpack"
             url "${TARBALL}"
@@ -74,10 +128,10 @@ jobs:
             license "MIT"
             head "https://github.com/atani/ctxpack.git", branch: "main"
 
-            depends_on "python@3.13"
+            depends_on "go" => :build
 
             def install
-              virtualenv_install_with_resources
+              system "go", "build", *std_go_args(ldflags: "-s -w -X main.version=#{version}"), "./cmd/ctxpack"
             end
 
             test do
@@ -88,9 +142,11 @@ jobs:
       - name: Commit and push formula
         if: steps.check.outputs.skip != 'true'
         working-directory: homebrew-tap
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/ctxpack.rb
-          git diff --staged --quiet || git commit -m "Update ctxpack to ${{ needs.release-please.outputs.tag_name }}"
+          git diff --staged --quiet || git commit -m "Update ctxpack to ${TAG}"
           git push

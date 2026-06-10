@@ -103,19 +103,33 @@ ctxpack https://example.com --no-record
 brew install atani/tap/ctxpack
 ```
 
+### Windows / winget
+
+After the next release is accepted into the Windows Package Manager community repository:
+
+```powershell
+winget install atani.ctxpack
+```
+
+This repository now ships Windows release artifacts and a winget manifest template under `packaging/winget/`.
+
 ### From source
 
 ```bash
 git clone https://github.com/atani/ctxpack.git
 cd ctxpack
-uv tool install .
+go install ./cmd/ctxpack
 ```
 
 Or run during development:
 
 ```bash
-uv run ctxpack https://example.com --stats
+go run ./cmd/ctxpack https://example.com --stats
 ```
+
+### Migrating from the Python version
+
+ctxpack v0.2.x and earlier was a Python package. The CLI surface (flags, subcommands, exit codes, JSON schema) and the `~/.ctxpack/stats.jsonl` history format are unchanged, so existing scripts and history keep working. The Python library API (`from ctxpack import pack`) is gone; if you installed via `pip`/`uv tool install`, switch to one of the install methods above.
 
 ## CLI
 
@@ -180,7 +194,7 @@ This is designed for relative before/after comparison. Absolute numbers will dif
 - **Timeout:** URL fetches time out after 20 seconds.
 - **Encoding:** the response's declared charset is used, defaulting to UTF-8. Invalid bytes are replaced with U+FFFD rather than failing.
 - **Size limit:** responses over 50 MB (and local files over 100 MB) are rejected to avoid memory exhaustion.
-- **User-Agent:** `ctxpack/0.1 (+https://github.com/atani/ctxpack)`.
+- **User-Agent:** `ctxpack (+https://github.com/atani/ctxpack)`.
 
 ## Limitations
 
@@ -204,7 +218,7 @@ For HTML vs. Markdown on stdin, the format is auto-detected by the presence of a
 
 ## Current status
 
-Early MVP. The current implementation intentionally uses Python standard library only. It works best for article/docs-like pages and local HTML. See [Limitations](#limitations) for what is out of scope in this version.
+Early MVP. The current implementation is a single Go CLI with one dependency on `golang.org/x/net/html` for HTML parsing. It works best for article/docs-like pages and local HTML. See [Limitations](#limitations) for what is out of scope in this version.
 
 ## Roadmap
 

@@ -1,0 +1,16 @@
+PackageIdentifier: atani.ctxpack
+PackageVersion: __VERSION__
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: ctxpack.exe
+    PortableCommandAlias: ctxpack
+Installers:
+  - Architecture: x64
+    InstallerUrl: __INSTALLER_URL_X64__
+    InstallerSha256: __INSTALLER_SHA256_X64__
+  - Architecture: arm64
+    InstallerUrl: __INSTALLER_URL_ARM64__
+    InstallerSha256: __INSTALLER_SHA256_ARM64__
+ManifestType: installer
+ManifestVersion: 1.10.0

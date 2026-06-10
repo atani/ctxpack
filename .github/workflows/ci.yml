@@ -6,29 +6,38 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.11", "3.13"]
+        go-version: ["1.23.x", "1.24.x", "1.25.x"]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-      - name: Set up Python
-        run: uv python install ${{ matrix.python-version }}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
       - name: Run tests
-        run: uv run --python ${{ matrix.python-version }} --with pytest pytest -q
+        run: go test ./...
       - name: Smoke test CLI
         run: |
-          uv run --python ${{ matrix.python-version }} ctxpack tests/fixture.html --stats
-          uv run --python ${{ matrix.python-version }} ctxpack stats
+          go run ./cmd/ctxpack tests/fixture.html --stats
+          go run ./cmd/ctxpack stats
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-      - name: Ruff lint
-        run: uvx ruff check src tests
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: go vet
+        run: go vet ./...
