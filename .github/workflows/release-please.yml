@@ -125,17 +125,17 @@ jobs:
       - name: Check for tap token
         id: check
         env:
-          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         run: |
           if [ -z "$TOKEN" ]; then
-            echo "HOMEBREW_TAP_TOKEN is not set; skipping formula update." >&2
+            echo "HOMEBREW_TAP_GITHUB_TOKEN is not set; skipping formula update." >&2
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         if: steps.check.outputs.skip != 'true'
         with:
           repository: atani/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           path: homebrew-tap
       - name: Generate formula
         if: steps.check.outputs.skip != 'true'
