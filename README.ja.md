@@ -103,13 +103,11 @@ brew install atani/tap/ctxpack
 
 ### Windows / winget
 
-次回リリースが Windows Package Manager community repository に取り込まれた後は、次でインストールできます。
-
 ```powershell
 winget install atani.ctxpack
 ```
 
-このリポジトリは Windows 向けリリース成果物と `packaging/winget/` の winget マニフェストテンプレートを含みます。
+Windows 向けの x64/arm64 ZIP 成果物と winget マニフェストはリリースに含まれます。投稿フローと自動更新ジョブは [`packaging/winget/`](packaging/winget/README.md) を参照してください。
 
 ### ソースから
 
