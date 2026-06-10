@@ -1,38 +1,96 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestRunVersionFlag(t *testing.T) {
-	if code := run([]string{"--version"}); code != 0 {
+// isolateHome points the stats history at a temp directory on every
+// platform: os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func fixturePath() string { return filepath.Join("..", "..", "tests", "fixture.html") }
+
+func TestRunVersionFlagPrintsVersion(t *testing.T) {
+	var code int
+	out := captureStdout(t, func() { code = run([]string{"--version"}) })
+	if code != 0 {
 		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out, "ctxpack "+version) {
+		t.Fatalf("version output = %q", out)
+	}
+}
+
+func TestRunHelpFlagPrintsUsage(t *testing.T) {
+	var code int
+	out := captureStdout(t, func() { code = run([]string{"--help"}) })
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out, "Usage: ctxpack") || !strings.Contains(out, "--query") {
+		t.Fatalf("usage output = %q", out)
 	}
 }
 
 func TestRunFixtureJSON(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	fixture := filepath.Join("..", "..", "tests", "fixture.html")
-	if code := run([]string{fixture, "--json"}); code != 0 {
-		t.Fatalf("code = %d", code)
+	isolateHome(t)
+	out := captureStdout(t, func() {
+		if code := run([]string{fixturePath(), "--json"}); code != 0 {
+			t.Errorf("code != 0")
+		}
+	})
+	if !strings.Contains(out, `"ok": true`) || !strings.Contains(out, `"format": "markdown"`) {
+		t.Fatalf("json output = %q", out)
 	}
 }
 
 func TestRunSubcommandForm(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	fixture := filepath.Join("..", "..", "tests", "fixture.html")
-	if code := run([]string{"run", fixture, "--json"}); code != 0 {
-		t.Fatalf("code = %d", code)
+	isolateHome(t)
+	out := captureStdout(t, func() {
+		if code := run([]string{"run", fixturePath(), "--json"}); code != 0 {
+			t.Errorf("code != 0")
+		}
+	})
+	if !strings.Contains(out, `"ok": true`) {
+		t.Fatalf("json output = %q", out)
 	}
 }
 
 func TestRunOutputWritesFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	fixture := filepath.Join("..", "..", "tests", "fixture.html")
+	isolateHome(t)
 	out := filepath.Join(t.TempDir(), "out.md")
-	if code := run([]string{fixture, "--no-record", "-o", out}); code != 0 {
+	if code := run([]string{fixturePath(), "--no-record", "-o", out}); code != 0 {
 		t.Fatalf("code = %d", code)
 	}
 	b, err := os.ReadFile(out)
@@ -45,15 +103,115 @@ func TestRunOutputWritesFile(t *testing.T) {
 }
 
 func TestRunMissingFileReturns2(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	if code := run([]string{filepath.Join(t.TempDir(), "does-not-exist.html"), "--no-record"}); code != 2 {
 		t.Fatalf("code = %d", code)
 	}
 }
 
+func TestRunHTTPErrorStatusReturns1(t *testing.T) {
+	isolateHome(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "<html><body>gone</body></html>", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	if code := run([]string{srv.URL, "--no-record"}); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+}
+
+func TestRunUnreachableHostReturns1(t *testing.T) {
+	isolateHome(t)
+	// Port 1 on localhost refuses connections, exercising the net.Error
+	// (retriable) classification path.
+	if code := run([]string{"http://127.0.0.1:1/", "--no-record"}); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+}
+
+func TestRunStatsAndResetFlow(t *testing.T) {
+	isolateHome(t)
+	captureStdout(t, func() {
+		if code := run([]string{fixturePath()}); code != 0 {
+			t.Errorf("pack code != 0")
+		}
+	})
+	statsOut := captureStdout(t, func() {
+		if code := run([]string{"stats"}); code != 0 {
+			t.Errorf("stats code != 0")
+		}
+	})
+	if !strings.Contains(statsOut, "Runs:        1") {
+		t.Fatalf("stats output = %q", statsOut)
+	}
+	resetOut := captureStdout(t, func() {
+		if code := run([]string{"reset", "--yes"}); code != 0 {
+			t.Errorf("reset code != 0")
+		}
+	})
+	if !strings.Contains(resetOut, "Reset 1 recorded run(s).") {
+		t.Fatalf("reset output = %q", resetOut)
+	}
+	afterOut := captureStdout(t, func() {
+		if code := run([]string{"stats"}); code != 0 {
+			t.Errorf("stats code != 0")
+		}
+	})
+	if !strings.Contains(afterOut, "Runs:        0") {
+		t.Fatalf("stats after reset = %q", afterOut)
+	}
+}
+
+func TestRunNoRecordSkipsHistory(t *testing.T) {
+	isolateHome(t)
+	captureStdout(t, func() {
+		if code := run([]string{fixturePath(), "--no-record"}); code != 0 {
+			t.Errorf("pack code != 0")
+		}
+	})
+	statsOut := captureStdout(t, func() {
+		if code := run([]string{"stats"}); code != 0 {
+			t.Errorf("stats code != 0")
+		}
+	})
+	if !strings.Contains(statsOut, "Runs:        0") {
+		t.Fatalf("--no-record still recorded: %q", statsOut)
+	}
+}
+
 func TestRunResetRequiresYes(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	if code := run([]string{"reset"}); code != 2 {
 		t.Fatalf("code = %d", code)
+	}
+}
+
+func TestRunParseErrors(t *testing.T) {
+	isolateHome(t)
+	cases := [][]string{
+		{"--bogus"},
+		{"--query"},
+		{"-o"},
+		{fixturePath(), "extra-arg"},
+		{"run"},
+		{},
+	}
+	for _, argv := range cases {
+		if code := run(argv); code != 2 {
+			t.Fatalf("argv %v: code = %d, want 2", argv, code)
+		}
+	}
+}
+
+func TestRunEmptyQueryMatchesPythonJSON(t *testing.T) {
+	isolateHome(t)
+	out := captureStdout(t, func() {
+		if code := run([]string{fixturePath(), "--no-record", "--json", "--query", ""}); code != 0 {
+			t.Errorf("code != 0")
+		}
+	})
+	// Python prints "query": "" when --query '' is given; nil would print null.
+	if !strings.Contains(out, `"query": ""`) {
+		t.Fatalf("empty query lost in JSON output: %q", out)
 	}
 }

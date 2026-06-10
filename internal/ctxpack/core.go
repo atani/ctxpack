@@ -1,3 +1,6 @@
+// Package ctxpack turns noisy HTML (remote or local) into compact Markdown
+// for AI-agent consumption, estimates the token savings, and keeps a
+// cumulative history of runs.
 package ctxpack
 
 import (
@@ -7,23 +10,33 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/charset"
 )
 
-const (
+// MaxFetchSize and MaxFileSize guard against memory exhaustion from very
+// large remote responses or local files. They are variables (not constants)
+// so tests can lower them to exercise the limits without multi-megabyte
+// fixtures.
+var (
 	MaxFetchSize = 50 * 1024 * 1024
 	MaxFileSize  = 100 * 1024 * 1024
-	UserAgent    = "ctxpack/0.1 (+https://github.com/atani/ctxpack)"
 )
+
+// UserAgent identifies ctxpack to remote servers. Deliberately version-free
+// so it cannot drift from the release version embedded in the binary.
+const UserAgent = "ctxpack (+https://github.com/atani/ctxpack)"
 
 var (
 	blockTags = map[string]bool{
@@ -44,9 +57,15 @@ var (
 	lineSpaceRe    = regexp.MustCompile(` *\n *`)
 	manyNewlinesRe = regexp.MustCompile(`\n{3,}`)
 	emptyHeadingRe = regexp.MustCompile(`(?m)^# +$`)
-	wordRe         = regexp.MustCompile(`\w+`)
+	// Go's \w and \s are ASCII-only (unlike Python's re on str), so word and
+	// whitespace classes are spelled out to keep CJK queries and full-width
+	// spaces working after the port.
+	wordRe        = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+	inlineSpaceRe = regexp.MustCompile(`[\s\p{Z}\x{85}]+`)
+	headingLineRe = regexp.MustCompile(`^#{1,6} `)
 )
 
+// TokenStats reports the token estimates before and after packing one source.
 type TokenStats struct {
 	RawHTMLTokens    int     `json:"raw_html_tokens"`
 	CleanTextTokens  int     `json:"clean_text_tokens"`
@@ -55,6 +74,7 @@ type TokenStats struct {
 	ReductionPercent float64 `json:"reduction_percent"`
 }
 
+// PackResult is the outcome of packing one source.
 type PackResult struct {
 	SourceURL string
 	Title     *string
@@ -64,6 +84,7 @@ type PackResult struct {
 	Query     *string
 }
 
+// JSONResult is the stable agent-facing JSON schema printed by --json.
 type JSONResult struct {
 	OK      bool              `json:"ok"`
 	Source  map[string]string `json:"source"`
@@ -73,6 +94,7 @@ type JSONResult struct {
 	Stats   TokenStats        `json:"stats"`
 }
 
+// ToJSONResult converts the result into the --json output schema.
 func (r PackResult) ToJSONResult() JSONResult {
 	return JSONResult{
 		OK:      true,
@@ -84,6 +106,12 @@ func (r PackResult) ToJSONResult() JSONResult {
 	}
 }
 
+// EstimateTokens returns a fast model-agnostic token estimate suitable for
+// before/after comparison.
+//
+// Heuristic: CJK characters count as ~0.8 tokens each, everything else as
+// ~1 token per 4 characters. This is an approximation for relative
+// before/after savings, not an exact per-model token count.
 func EstimateTokens(text string) int {
 	if text == "" {
 		return 0
@@ -103,21 +131,54 @@ func EstimateTokens(text string) int {
 	return v
 }
 
+// savedTokens never reports negative savings, even when packing grows the
+// estimate (e.g. heading markers added to sparse text).
+func savedTokens(raw, final int) int {
+	if raw > final {
+		return raw - final
+	}
+	return 0
+}
+
+// reductionPercent returns saved/raw as a percentage rounded to one decimal.
+func reductionPercent(saved, raw int) float64 {
+	if raw <= 0 {
+		return 0
+	}
+	return math.Round((float64(saved)/float64(raw))*1000) / 10
+}
+
 func newStats(raw, clean, final string) TokenStats {
 	rawT := EstimateTokens(raw)
 	cleanT := EstimateTokens(clean)
 	finalT := EstimateTokens(final)
-	saved := rawT - finalT
-	if saved < 0 {
-		saved = 0
+	saved := savedTokens(rawT, finalT)
+	return TokenStats{
+		RawHTMLTokens:    rawT,
+		CleanTextTokens:  cleanT,
+		FinalTokens:      finalT,
+		SavedTokens:      saved,
+		ReductionPercent: reductionPercent(saved, rawT),
 	}
-	reduction := 0.0
-	if rawT > 0 {
-		reduction = math.Round((float64(saved)/float64(rawT))*1000) / 10
-	}
-	return TokenStats{RawHTMLTokens: rawT, CleanTextTokens: cleanT, FinalTokens: finalT, SavedTokens: saved, ReductionPercent: reduction}
 }
 
+// HTTPStatusError reports a non-success HTTP response. The CLI treats it as a
+// retriable network error, matching the Python version's HTTPError handling.
+type HTTPStatusError struct {
+	Code   int
+	Status string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return "unexpected HTTP status: " + e.Status
+}
+
+// FetchURL downloads url and returns its body decoded to UTF-8.
+//
+// Non-2xx/3xx responses become an *HTTPStatusError instead of being packed as
+// content. The size limit applies to the raw (pre-decode) bytes, and the
+// response's declared charset (Content-Type header) is honored with UTF-8 as
+// the fallback, both matching the original Python implementation.
 func FetchURL(url string, timeout time.Duration) (string, error) {
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -130,26 +191,48 @@ func FetchURL(url string, timeout time.Duration) (string, error) {
 		return "", err
 	}
 	defer res.Body.Close()
-	if res.ContentLength > MaxFetchSize {
+	if res.StatusCode >= 400 {
+		return "", &HTTPStatusError{Code: res.StatusCode, Status: res.Status}
+	}
+	if res.ContentLength > int64(MaxFetchSize) {
 		return "", fmt.Errorf("response too large: %d bytes (limit %d)", res.ContentLength, MaxFetchSize)
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, MaxFetchSize+1))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, int64(MaxFetchSize)+1))
 	if err != nil {
 		return "", err
 	}
-	if len(body) > MaxFetchSize {
+	if len(raw) > MaxFetchSize {
 		return "", fmt.Errorf("response exceeds %d bytes", MaxFetchSize)
 	}
-	return string(bytes.ToValidUTF8(body, []byte("\uFFFD"))), nil
+	return decodeBody(raw, res.Header.Get("Content-Type")), nil
 }
 
+// decodeBody converts raw response bytes to UTF-8 using the charset declared
+// in the Content-Type header, defaulting to UTF-8 when absent or unknown.
+// Deliberately no content sniffing: the HTML-spec default of windows-1252
+// would mangle the many UTF-8 pages that omit a charset declaration.
+func decodeBody(raw []byte, contentType string) string {
+	if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		if label, ok := params["charset"]; ok {
+			if enc, _ := charset.Lookup(label); enc != nil {
+				if decoded, err := enc.NewDecoder().Bytes(raw); err == nil {
+					raw = decoded
+				}
+			}
+		}
+	}
+	return string(bytes.ToValidUTF8(raw, []byte("�")))
+}
+
+// ReadSource resolves source ("-" for stdin, http(s) URL, or file path) and
+// returns a display name plus the UTF-8 content.
 func ReadSource(source string, stdin io.Reader) (string, string, error) {
 	if source == "-" {
 		b, err := io.ReadAll(stdin)
 		if err != nil {
 			return "", "", err
 		}
-		return "stdin", string(bytes.ToValidUTF8(b, []byte("\uFFFD"))), nil
+		return "stdin", string(bytes.ToValidUTF8(b, []byte("�"))), nil
 	}
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		s, err := FetchURL(source, 20*time.Second)
@@ -160,16 +243,33 @@ func ReadSource(source string, stdin io.Reader) (string, string, error) {
 		return "", "", err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	// Read one byte past the limit instead of trusting Stat() so the cap also
+	// applies to special files (e.g. /dev/zero, FIFOs) whose length cannot be
+	// learned up front.
+	b, err := io.ReadAll(io.LimitReader(f, int64(MaxFileSize)+1))
 	if err != nil {
 		return "", "", err
 	}
 	if len(b) > MaxFileSize {
 		return "", "", fmt.Errorf("file too large: exceeds %d bytes", MaxFileSize)
 	}
-	return source, string(bytes.ToValidUTF8(b, []byte("\uFFFD"))), nil
+	return source, string(bytes.ToValidUTF8(b, []byte("�"))), nil
 }
 
+// walkFrame is one step of the iterative DOM traversal in HTMLToMarkdown.
+// An explicit stack (rather than recursion) keeps deeply nested untrusted
+// HTML from exhausting the goroutine stack.
+type walkFrame struct {
+	node     *html.Node
+	skipping bool
+	inTitle  bool
+	// exit marks a post-order visit: emit the trailing newline for a block
+	// element after all of its children have been processed.
+	exit bool
+}
+
+// HTMLToMarkdown strips boilerplate from HTML and returns the document title
+// (nil when absent) plus a compact Markdown rendering of the main content.
 func HTMLToMarkdown(input string) (*string, string) {
 	doc, err := html.Parse(strings.NewReader(input))
 	if err != nil {
@@ -177,8 +277,15 @@ func HTMLToMarkdown(input string) (*string, string) {
 	}
 	var parts []string
 	var titleParts []string
-	var walk func(*html.Node, bool, bool)
-	walk = func(n *html.Node, skipping bool, inTitle bool) {
+	stack := []walkFrame{{node: doc}}
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if f.exit {
+			parts = append(parts, "\n")
+			continue
+		}
+		n, skipping, inTitle := f.node, f.skipping, f.inTitle
 		if n.Type == html.ElementNode {
 			tag := strings.ToLower(n.Data)
 			if tag == "title" {
@@ -208,14 +315,16 @@ func HTMLToMarkdown(input string) (*string, string) {
 				}
 			}
 		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c, skipping, inTitle)
-		}
+		// The exit frame is pushed before the children so it pops after all
+		// of them (LIFO); children are pushed in reverse to pop in document
+		// order.
 		if n.Type == html.ElementNode && !skipping && blockTags[strings.ToLower(n.Data)] {
-			parts = append(parts, "\n")
+			stack = append(stack, walkFrame{exit: true})
+		}
+		for c := n.LastChild; c != nil; c = c.PrevSibling {
+			stack = append(stack, walkFrame{node: c, skipping: skipping, inTitle: inTitle})
 		}
 	}
-	walk(doc, false, false)
 	title := NormalizeInline(strings.Join(titleParts, " "))
 	var titlePtr *string
 	if title != "" {
@@ -244,10 +353,14 @@ func looksNoisy(tag string, attrs []html.Attribute) bool {
 	return false
 }
 
+// NormalizeInline collapses all whitespace runs (including Unicode spaces
+// such as U+3000) into single spaces and trims the result.
 func NormalizeInline(text string) string {
-	return strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(text, " "))
+	return strings.TrimSpace(inlineSpaceRe.ReplaceAllString(text, " "))
 }
 
+// NormalizeText canonicalizes line endings and collapses excess blank lines
+// and indentation left over from HTML extraction.
 func NormalizeText(text string) string {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	text = spaceRe.ReplaceAllString(text, " ")
@@ -257,6 +370,9 @@ func NormalizeText(text string) string {
 	return strings.TrimSpace(text)
 }
 
+// SplitSections splits Markdown into sections at ATX headings (1-6 "#"
+// followed by a space, mirroring Python's `^#{1,6} ` rule). When no headings
+// exist it falls back to paragraph (blank-line) splitting.
 func SplitSections(markdown string) []string {
 	lines := strings.Split(markdown, "\n")
 	var sections []string
@@ -268,7 +384,7 @@ func SplitSections(markdown string) []string {
 		cur = nil
 	}
 	for _, line := range lines {
-		if strings.HasPrefix(line, "#") && strings.Contains(line, " ") {
+		if headingLineRe.MatchString(line) {
 			flush()
 		}
 		cur = append(cur, line)
@@ -285,6 +401,8 @@ func SplitSections(markdown string) []string {
 	return sections
 }
 
+// queryTerms lowercases the query and keeps word-ish tokens of two or more
+// runes. wordRe is Unicode-aware so CJK queries produce usable terms.
 func queryTerms(query string) []string {
 	words := wordRe.FindAllString(query, -1)
 	terms := make([]string, 0, len(words))
@@ -296,13 +414,9 @@ func queryTerms(query string) []string {
 	return terms
 }
 
-func ScoreSection(section string, query *string) float64 {
-	if query == nil {
-		return 0
-	}
-	return scoreSectionTerms(section, queryTerms(*query))
-}
-
+// scoreSectionTerms scores relevance by case-insensitive substring matches:
+// +2 per body occurrence (overlaps counted) and an extra +3 per term found in
+// a leading heading. No stemming or semantic matching is performed.
 func scoreSectionTerms(section string, terms []string) float64 {
 	hay := strings.ToLower(section)
 	score := 0.0
@@ -320,6 +434,9 @@ func scoreSectionTerms(section string, terms []string) float64 {
 	return score
 }
 
+// ApplyQuery moves likely relevant sections first while keeping the full
+// compact context: sections are reordered by descending relevance score, ties
+// keep their original document order (stable sort), and nothing is dropped.
 func ApplyQuery(markdown string, query *string) string {
 	if query == nil {
 		return markdown
@@ -358,6 +475,9 @@ func ApplyQuery(markdown string, query *string) string {
 	return strings.Join(ordered, "\n\n")
 }
 
+// Pack reads source, converts HTML to compact Markdown (plain text is only
+// normalized), applies the optional query reordering, and reports the token
+// savings.
 func Pack(source string, query *string, stdin io.Reader) (PackResult, error) {
 	sourceURL, raw, err := ReadSource(source, stdin)
 	if err != nil {
@@ -374,6 +494,9 @@ func Pack(source string, query *string, stdin io.Reader) (PackResult, error) {
 	return PackResult{SourceURL: sourceURL, Title: title, FetchedAt: time.Now().UTC().Format(time.RFC3339Nano), Content: final, Stats: newStats(raw, clean, final), Query: query}, nil
 }
 
+// ResultToMarkdown renders the packed content with a YAML front-matter
+// header. String values are JSON-quoted so titles containing "---" or
+// newlines cannot break the front-matter delimiters.
 func ResultToMarkdown(result PackResult, includeStats bool) string {
 	lines := []string{"---"}
 	if result.Title != nil {
@@ -400,28 +523,56 @@ func ResultToMarkdown(result PackResult, includeStats bool) string {
 	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
 }
 
+// StatsTable renders one run's token savings as an aligned text table.
 func StatsTable(result PackResult) string {
 	return fmt.Sprintf("Raw input:   %s tokens\nClean text:  %s tokens\nFinal:       %s tokens\nSaved:       %s tokens\nReduction:   %.1f%%\n", comma(result.Stats.RawHTMLTokens), comma(result.Stats.CleanTextTokens), comma(result.Stats.FinalTokens), comma(result.Stats.SavedTokens), result.Stats.ReductionPercent)
 }
 
-func DefaultStatsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ctxpack", "stats.jsonl")
+// DefaultStatsPath returns ~/.ctxpack/stats.jsonl, or an error when the home
+// directory cannot be determined (it must not fall back to the working
+// directory, which would scatter .ctxpack/ directories silently).
+func DefaultStatsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".ctxpack", "stats.jsonl"), nil
 }
 
-func RecordRun(result PackResult, statsPath string) error {
-	if statsPath == "" {
-		statsPath = DefaultStatsPath()
+// RunRecord is one recorded run in the stats history file. The JSON schema
+// matches the Python version, so existing stats.jsonl files keep loading.
+type RunRecord struct {
+	SourceURL string     `json:"source_url"`
+	Title     *string    `json:"title"`
+	FetchedAt string     `json:"fetched_at"`
+	Query     *string    `json:"query"`
+	Stats     TokenStats `json:"stats"`
+}
+
+func resolveStatsPath(statsPath string) (string, error) {
+	if statsPath != "" {
+		return statsPath, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(statsPath), 0o755); err != nil {
+	return DefaultStatsPath()
+}
+
+// RecordRun appends the run to the history file (default: ~/.ctxpack/stats.jsonl).
+// The file is created 0600 (directory 0700) because source URLs and queries
+// amount to a browsing history.
+func RecordRun(result PackResult, statsPath string) error {
+	statsPath, err := resolveStatsPath(statsPath)
+	if err != nil {
 		return err
 	}
-	row := map[string]any{"source_url": result.SourceURL, "title": result.Title, "fetched_at": result.FetchedAt, "query": result.Query, "stats": result.Stats}
+	if err := os.MkdirAll(filepath.Dir(statsPath), 0o700); err != nil {
+		return err
+	}
+	row := RunRecord{SourceURL: result.SourceURL, Title: result.Title, FetchedAt: result.FetchedAt, Query: result.Query, Stats: result.Stats}
 	b, err := json.Marshal(row)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(statsPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(statsPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -430,9 +581,12 @@ func RecordRun(result PackResult, statsPath string) error {
 	return err
 }
 
-func LoadHistory(statsPath string) ([]map[string]any, error) {
-	if statsPath == "" {
-		statsPath = DefaultStatsPath()
+// LoadHistory reads the history file, skipping blank and corrupt lines.
+// A missing file is an empty history, not an error.
+func LoadHistory(statsPath string) ([]RunRecord, error) {
+	statsPath, err := resolveStatsPath(statsPath)
+	if err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(statsPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -441,12 +595,12 @@ func LoadHistory(statsPath string) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var rows []map[string]any
+	var rows []RunRecord
 	for _, line := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var row map[string]any
+		var row RunRecord
 		if json.Unmarshal([]byte(line), &row) == nil {
 			rows = append(rows, row)
 		}
@@ -454,6 +608,7 @@ func LoadHistory(statsPath string) ([]map[string]any, error) {
 	return rows, nil
 }
 
+// HistorySummary aggregates token savings across all recorded runs.
 type HistorySummary struct {
 	Runs             int     `json:"runs"`
 	RawInputTokens   int     `json:"raw_input_tokens"`
@@ -463,27 +618,24 @@ type HistorySummary struct {
 	ReductionPercent float64 `json:"reduction_percent"`
 }
 
-func SummarizeHistory(rows []map[string]any) HistorySummary {
+// SummarizeHistory totals the per-run stats into one summary.
+func SummarizeHistory(rows []RunRecord) HistorySummary {
 	s := HistorySummary{Runs: len(rows)}
 	for _, row := range rows {
-		stats, _ := row["stats"].(map[string]any)
-		s.RawInputTokens += number(stats["raw_html_tokens"])
-		s.CleanTextTokens += number(stats["clean_text_tokens"])
-		s.FinalTokens += number(stats["final_tokens"])
+		s.RawInputTokens += row.Stats.RawHTMLTokens
+		s.CleanTextTokens += row.Stats.CleanTextTokens
+		s.FinalTokens += row.Stats.FinalTokens
 	}
-	s.SavedTokens = s.RawInputTokens - s.FinalTokens
-	if s.SavedTokens < 0 {
-		s.SavedTokens = 0
-	}
-	if s.RawInputTokens > 0 {
-		s.ReductionPercent = math.Round((float64(s.SavedTokens)/float64(s.RawInputTokens))*1000) / 10
-	}
+	s.SavedTokens = savedTokens(s.RawInputTokens, s.FinalTokens)
+	s.ReductionPercent = reductionPercent(s.SavedTokens, s.RawInputTokens)
 	return s
 }
 
+// ResetHistory deletes the history file and returns how many runs it held.
 func ResetHistory(statsPath string) (int, error) {
-	if statsPath == "" {
-		statsPath = DefaultStatsPath()
+	statsPath, err := resolveStatsPath(statsPath)
+	if err != nil {
+		return 0, err
 	}
 	rows, err := LoadHistory(statsPath)
 	if err != nil {
@@ -495,23 +647,14 @@ func ResetHistory(statsPath string) (int, error) {
 	return len(rows), nil
 }
 
+// HistoryTable renders the cumulative summary as an aligned text table.
 func HistoryTable(s HistorySummary) string {
 	return fmt.Sprintf("Runs:        %s\nRaw input:   %s tokens\nClean text:  %s tokens\nFinal:       %s tokens\nSaved:       %s tokens\nReduction:   %.1f%%\n", comma(s.Runs), comma(s.RawInputTokens), comma(s.CleanTextTokens), comma(s.FinalTokens), comma(s.SavedTokens), s.ReductionPercent)
 }
 
-func number(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	default:
-		return 0
-	}
-}
-
+// comma formats n with thousands separators (1234567 -> "1,234,567").
 func comma(n int) string {
-	s := fmt.Sprintf("%d", n)
+	s := strconv.Itoa(n)
 	if len(s) <= 3 {
 		return s
 	}

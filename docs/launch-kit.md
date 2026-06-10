@@ -51,5 +51,5 @@ The core idea is that web-to-markdown is not enough for agents. Agents need toke
 Suggested repository metadata:
 
 - Description: Token-aware context extractor for AI agents
-- Topics: ai-agents, llm, context, tokens, markdown, cli, python
+- Topics: ai-agents, llm, context, tokens, markdown, cli, go, golang
 - Website: empty until docs site exists

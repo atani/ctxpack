@@ -125,6 +125,10 @@ go install ./cmd/ctxpack
 go run ./cmd/ctxpack https://example.com --stats
 ```
 
+### Python 版からの移行
+
+v0.2.x までの ctxpack は Python パッケージでした。CLI（フラグ・サブコマンド・終了コード・JSON スキーマ）と `~/.ctxpack/stats.jsonl` の履歴形式は変わらないため、既存のスクリプトと履歴はそのまま動きます。Python ライブラリ API（`from ctxpack import pack`）は廃止されたので、`pip` / `uv tool install` でインストールしていた場合は上記のいずれかの方法に切り替えてください。
+
 ## CLI リファレンス
 
 ```bash
@@ -188,7 +192,7 @@ ctxpack reset --yes
 - **タイムアウト：** URL フェッチは 20 秒でタイムアウト
 - **エンコーディング：** レスポンスで宣言された文字セットを使用、デフォルトは UTF-8。無効なバイトは U+FFFD で置換
 - **サイズ制限：** 50 MB 超のレスポンス（ローカルファイルは 100 MB 超）はメモリ枯渇防止のため拒否
-- **User-Agent：** `ctxpack/0.1 (+https://github.com/atani/ctxpack)`
+- **User-Agent：** `ctxpack (+https://github.com/atani/ctxpack)`
 
 ## 制限事項
 
