@@ -101,18 +101,28 @@ ctxpack https://example.com --no-record
 brew install atani/tap/ctxpack
 ```
 
+### Windows / winget
+
+次回リリースが Windows Package Manager community repository に取り込まれた後は、次でインストールできます。
+
+```powershell
+winget install atani.ctxpack
+```
+
+このリポジトリは Windows 向けリリース成果物と `packaging/winget/` の winget マニフェストテンプレートを含みます。
+
 ### ソースから
 
 ```bash
 git clone https://github.com/atani/ctxpack.git
 cd ctxpack
-uv tool install .
+go install ./cmd/ctxpack
 ```
 
 開発中に実行する場合。
 
 ```bash
-uv run ctxpack https://example.com --stats
+go run ./cmd/ctxpack https://example.com --stats
 ```
 
 ## CLI リファレンス

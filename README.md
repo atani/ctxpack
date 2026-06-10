@@ -103,18 +103,28 @@ ctxpack https://example.com --no-record
 brew install atani/tap/ctxpack
 ```
 
+### Windows / winget
+
+After the next release is accepted into the Windows Package Manager community repository:
+
+```powershell
+winget install atani.ctxpack
+```
+
+This repository now ships Windows release artifacts and a winget manifest template under `packaging/winget/`.
+
 ### From source
 
 ```bash
 git clone https://github.com/atani/ctxpack.git
 cd ctxpack
-uv tool install .
+go install ./cmd/ctxpack
 ```
 
 Or run during development:
 
 ```bash
-uv run ctxpack https://example.com --stats
+go run ./cmd/ctxpack https://example.com --stats
 ```
 
 ## CLI
@@ -204,7 +214,7 @@ For HTML vs. Markdown on stdin, the format is auto-detected by the presence of a
 
 ## Current status
 
-Early MVP. The current implementation intentionally uses Python standard library only. It works best for article/docs-like pages and local HTML. See [Limitations](#limitations) for what is out of scope in this version.
+Early MVP. The current implementation is a single Go CLI with one dependency on `golang.org/x/net/html` for HTML parsing. It works best for article/docs-like pages and local HTML. See [Limitations](#limitations) for what is out of scope in this version.
 
 ## Roadmap
 

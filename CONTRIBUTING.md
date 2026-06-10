@@ -5,8 +5,8 @@ Thanks for helping improve CtxPack.
 ## Development
 
 ```bash
-uv run --with pytest pytest -q
-uv run ctxpack tests/fixture.html --stats
+go test ./...
+go run ./cmd/ctxpack tests/fixture.html --stats
 ```
 
 ## Good first areas
