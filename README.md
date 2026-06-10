@@ -103,6 +103,22 @@ ctxpack https://example.com --no-record
 brew install atani/tap/ctxpack
 ```
 
+### winget (Windows)
+
+```powershell
+winget install atani.ctxpack
+```
+
+winget downloads and runs the MSI, which bundles a standalone `ctxpack.exe`
+(frozen with PyInstaller) so no Python install is required. The installer adds
+`ctxpack` to your user `PATH`.
+
+> [!NOTE]
+> The MSI and winget package are not code-signed yet, so Windows SmartScreen may
+> show an "unknown publisher" prompt. The MSI is also attached to each
+> [release](https://github.com/atani/ctxpack/releases/latest) if you prefer an
+> offline installer.
+
 ### From source
 
 ```bash

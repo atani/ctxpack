@@ -36,6 +36,40 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
 
+  build-msi:
+    name: Build MSI installer
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: Build standalone executable
+        shell: pwsh
+        run: |
+          uv venv
+          uv pip install pyinstaller .
+          .venv\Scripts\pyinstaller.exe --onefile --console `
+            --name ctxpack build/windows/ctxpack_entry.py
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.6
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $Version = "${{ needs.release-please.outputs.tag_name }}".TrimStart('v')
+          wix build build/windows/ctxpack.wxs `
+            -arch x64 `
+            -d Version=$Version `
+            -d ExeSource=dist/ctxpack.exe `
+            -o ctxpack-windows-x64.msi
+      - name: Upload Release Asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" ctxpack-windows-x64.msi
+
   publish-homebrew:
     name: Update Homebrew formula
     needs: release-please
@@ -94,3 +128,30 @@ jobs:
           git add Formula/ctxpack.rb
           git diff --staged --quiet || git commit -m "Update ctxpack to ${{ needs.release-please.outputs.tag_name }}"
           git push
+
+  publish-winget:
+    name: Publish to winget
+    needs: [release-please, build-msi]
+    # Enable by setting the repository variable ENABLE_WINGET=true once the
+    # WINGET_TOKEN secret and a fork of microsoft/winget-pkgs are in place.
+    if: ${{ needs.release-please.outputs.release_created && vars.ENABLE_WINGET == 'true' }}
+    runs-on: ubuntu-latest
+    # The submission acts on the winget-pkgs fork via WINGET_TOKEN, so this job
+    # needs no write access to GITHUB_TOKEN on this repository.
+    permissions:
+      contents: read
+    steps:
+      - name: Compute version
+        id: ver
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Submit MSI to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: atani.ctxpack
+          version: ${{ steps.ver.outputs.version }}
+          release-tag: ${{ needs.release-please.outputs.tag_name }}
+          installers-regex: '\.msi$'
+          fork-user: atani
+          token: ${{ secrets.WINGET_TOKEN }}
