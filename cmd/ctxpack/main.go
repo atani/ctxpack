@@ -14,7 +14,7 @@ import (
 	"github.com/atani/ctxpack/internal/ctxpack"
 )
 
-var version = "0.2.0" // x-release-please-version
+var version = "0.3.0" // x-release-please-version
 
 const usage = `Usage: ctxpack [SOURCE] [flags]
 
