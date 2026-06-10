@@ -111,7 +111,7 @@ After the next release is accepted into the Windows Package Manager community re
 winget install atani.ctxpack
 ```
 
-This repository now ships Windows release artifacts and a winget manifest template under `packaging/winget/`.
+Releases ship Windows x64/arm64 ZIP artifacts and generated winget manifests. See [`packaging/winget/`](packaging/winget/README.md) for the first-submission steps and the automated update job.
 
 ### From source
 

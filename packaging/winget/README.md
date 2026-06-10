@@ -1,20 +1,39 @@
 # winget packaging
 
-CtxPack releases include Windows ZIP artifacts and a generated winget manifest bundle.
+CtxPack releases include Windows ZIP artifacts (x64 + arm64) and a generated
+winget manifest bundle (`ctxpack_<version>_winget_manifests.zip`).
 
-To publish a new version to winget after a GitHub release is created:
+## First submission (manual, once)
+
+A brand-new package must be introduced to the community repository by hand:
 
 1. Download `ctxpack_<version>_winget_manifests.zip` from the release.
-2. Unzip it into a local clone of `microsoft/winget-pkgs` under `manifests/a/atani/ctxpack/<version>/`.
+2. Unzip it into a local clone of `microsoft/winget-pkgs` under
+   `manifests/a/atani/ctxpack/<version>/`.
 3. Validate and submit:
 
-```powershell
-winget validate manifests\a\atani\ctxpack\<version>\
-wingetcreate submit manifests\a\atani\ctxpack\<version>\
-```
+   ```powershell
+   winget validate manifests\a\atani\ctxpack\<version>\
+   wingetcreate submit manifests\a\atani\ctxpack\<version>\
+   ```
 
-Once Microsoft merges the community manifest, users can install with:
+Once Microsoft merges the manifest, users can install with:
 
 ```powershell
 winget install atani.ctxpack
 ```
+
+## Subsequent versions (automated)
+
+The `publish-winget` job in `.github/workflows/release-please.yml` opens the
+update PR to `microsoft/winget-pkgs` automatically on each release, using
+[`vedantmgoyal9/winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser).
+It is dormant until you enable it:
+
+1. Fork `microsoft/winget-pkgs` to `atani/winget-pkgs`.
+2. Create a classic PAT with `public_repo` scope that can push to that fork,
+   and store it as the `WINGET_TOKEN` repository secret.
+3. Set the repository variable `ENABLE_WINGET` to `true`.
+
+After that, every release regenerates manifests from the Windows zips and
+submits the winget-pkgs PR without manual steps.

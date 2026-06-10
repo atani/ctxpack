@@ -91,6 +91,31 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: gh release upload "$TAG" dist/*.zip dist/checksums.txt
 
+  publish-winget:
+    name: Submit to winget
+    needs: [release-please, build-release]
+    # Stays dormant until the repository variable ENABLE_WINGET is set to
+    # "true" (after a winget-pkgs fork and the WINGET_TOKEN secret are in
+    # place). The first-ever submission of a brand-new package still goes
+    # through the manual flow in packaging/winget/README.md; this job keeps
+    # subsequent versions up to date automatically.
+    if: ${{ needs.release-please.outputs.release_created && vars.ENABLE_WINGET == 'true' }}
+    runs-on: ubuntu-latest
+    # The submission acts on the winget-pkgs fork via WINGET_TOKEN, so no
+    # write access to this repository's GITHUB_TOKEN is needed.
+    permissions:
+      contents: read
+    steps:
+      - name: Submit Windows zips to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: atani.ctxpack
+          version: ${{ needs.release-please.outputs.version }}
+          release-tag: ${{ needs.release-please.outputs.tag_name }}
+          installers-regex: '_windows_(amd64|arm64)\.zip$'
+          fork-user: atani
+          token: ${{ secrets.WINGET_TOKEN }}
+
   publish-homebrew:
     name: Update Homebrew formula
     needs: release-please
