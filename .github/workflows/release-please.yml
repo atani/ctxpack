@@ -22,6 +22,13 @@ jobs:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
+          # Prefer a PAT so the release PR's commits trigger the required CI
+          # checks: pushes made with the default GITHUB_TOKEN do not fire
+          # other workflows, which leaves the release PR perpetually blocked
+          # under branch protection. Falls back to GITHUB_TOKEN until the
+          # RELEASE_PLEASE_TOKEN secret is configured (CI must then be run on
+          # the release PR manually, e.g. by closing and reopening it).
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .release-please-manifest.json
 
