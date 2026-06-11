@@ -298,6 +298,44 @@ func TestPackRejectsRemoteShellWithMountPointAndSomeText(t *testing.T) {
 	}
 }
 
+func TestPackRejectsRemoteShellWithNoscriptOnly(t *testing.T) {
+	// No SPA mount point and too much text for the bare-shell path: only the
+	// noscript "enable JavaScript" message confirms the shell.
+	srv := serveHTML(t, `<html><head><title>App</title></head><body>
+<p>Loading the application. Please wait while the interface starts up.</p>
+<noscript>Please enable JavaScript to continue using this application.</noscript>
+<script src="/app.js"></script>
+</body></html>`)
+	_, err := Pack(srv.URL, nil, strings.NewReader(""))
+	var jsErr *JSRequiredError
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("err = %v, want *JSRequiredError", err)
+	}
+}
+
+func TestLooksJSRequiredThresholdBoundaries(t *testing.T) {
+	script := `<script src="/a.js"></script>`
+	mount := `<div id="root"></div>`
+	if looksJSRequired(script+mount, strings.Repeat("a", JSRequiredMaxCleanRunes)) {
+		t.Fatal("text at the max threshold must never be flagged")
+	}
+	if !looksJSRequired(script+mount, strings.Repeat("a", JSRequiredMaxCleanRunes-1)) {
+		t.Fatal("thin text with scripts and a mount point must be flagged")
+	}
+	if looksJSRequired(script, strings.Repeat("a", JSRequiredBareShellRunes)) {
+		t.Fatal("text at the bare-shell threshold without markers must not be flagged")
+	}
+	if !looksJSRequired(script, strings.Repeat("a", JSRequiredBareShellRunes-1)) {
+		t.Fatal("near-empty text with scripts must be flagged")
+	}
+	if looksJSRequired(mount, "") {
+		t.Fatal("a page without a script tag must never be flagged")
+	}
+	if looksJSRequired(`<p><scripture>verse</scripture></p>`, "") {
+		t.Fatal("<scripture must not count as a script tag")
+	}
+}
+
 func TestPackKeepsShortStaticPageWithoutScripts(t *testing.T) {
 	srv := serveHTML(t, `<html><head><title>Hi</title></head><body><p>Short note.</p></body></html>`)
 	result, err := Pack(srv.URL, nil, strings.NewReader(""))

@@ -170,6 +170,19 @@ func runPack(source string, opts options) int {
 	return 0
 }
 
+// hintURL returns the URL single-quoted for safe copy-paste into a POSIX
+// shell. A URL containing a single quote or a control character could break
+// out of the quoting when the printed hint command is pasted (or executed by
+// an agent) verbatim, so such URLs fall back to a placeholder instead.
+func hintURL(url string) string {
+	for _, r := range url {
+		if r == '\'' || r < 0x20 || r == 0x7f {
+			return "URL"
+		}
+	}
+	return "'" + url + "'"
+}
+
 // toJSON marshals v indented and without HTML escaping, so <, > and & in the
 // content survive byte-for-byte like Python's ensure_ascii=False output.
 func toJSON(v any) (string, error) {
@@ -262,7 +275,7 @@ func classifyError(err error) int {
 	}
 	if errors.As(err, &jsErr) {
 		fmt.Fprintf(os.Stderr, "ctxpack: %v\n", err)
-		fmt.Fprintf(os.Stderr, "hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --dump-dom '%s' | ctxpack -`, or fall back to a JavaScript-capable fetcher.\n", jsErr.URL)
+		fmt.Fprintf(os.Stderr, "hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --dump-dom %s | ctxpack -`, or fall back to a JavaScript-capable fetcher.\n", hintURL(jsErr.URL))
 		return 3
 	}
 	if errors.As(err, &netErr) || errors.As(err, &statusErr) {

@@ -208,7 +208,7 @@ CtxPack 0.x は静的な HTML / Markdown コンテンツを対象としていま
 
 ### JavaScript レンダリングが必要なページ
 
-取得したページが未レンダリングの JavaScript アプリケーションのシェルに見える場合（抽出できるテキストがほぼ無い + `<script>` タグがあり、SPA のマウントポイント（`id="root"`, `id="app"`, `id="__next"` など）や `<noscript>` の「JavaScript を有効にしてください」メッセージで確認できる場合）、CtxPack はほぼ空のコンテンツを出力する代わりに終了コード `3` で終了します。
+取得したページが未レンダリングの JavaScript アプリケーションのシェルに見える場合（抽出できるテキストがほぼ無い + `<script>` タグがあり、SPA のマウントポイント（`id="root"`, `id="app"`, `id="__next"`, `id="___gatsby"`, `data-reactroot`, `ng-app`）や `<noscript>` の「JavaScript を有効にしてください」メッセージで確認できる場合）、CtxPack はほぼ空のコンテンツを出力する代わりに終了コード `3` で終了します。
 
 ```text
 ctxpack: page appears to require JavaScript rendering; no extractable main content: https://app.example.com
@@ -232,6 +232,8 @@ hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --d
    ```
 
 この検知は CtxPack 自身が取得した URL にのみ適用され、ヒューリスティックです。一部をサーバーサイドレンダリングし残りを遅延読み込みするページは、通常どおりパックされます。
+
+互換性に関する注記：この検知が入る前（v0.3.x 以前）は、こうしたページはほぼ空のコンテンツ + 終了コード `0` でパックされていました。終了コード `0` を「使えるコンテンツが得られた」とみなしていたスクリプトは、終了コード `3` も扱うようにしてください。
 
 ## ロードマップ
 

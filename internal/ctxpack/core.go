@@ -69,6 +69,9 @@ var (
 	// the visitor to enable JavaScript.
 	jsMountRe    = regexp.MustCompile(`(?i)\bid\s*=\s*["']?(root|app|__next|___gatsby)["'\s>]|data-reactroot|\bng-app\b`)
 	noscriptJSRe = regexp.MustCompile(`(?is)<noscript\b[^>]*>.*?javascript.*?</noscript>`)
+	// scriptTagRe requires a real tag boundary so text like "<scripture"
+	// cannot count as a script tag.
+	scriptTagRe = regexp.MustCompile(`(?i)<script[\s>]`)
 )
 
 // TokenStats reports the token estimates before and after packing one source.
@@ -201,7 +204,7 @@ func looksJSRequired(raw, clean string) bool {
 	if cleanRunes >= JSRequiredMaxCleanRunes {
 		return false
 	}
-	if !strings.Contains(strings.ToLower(raw), "<script") {
+	if !scriptTagRe.MatchString(raw) {
 		return false
 	}
 	if cleanRunes < JSRequiredBareShellRunes {

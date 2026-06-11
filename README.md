@@ -210,7 +210,7 @@ For HTML vs. Markdown on stdin, the format is auto-detected by the presence of a
 
 ### JavaScript-rendered pages
 
-When a fetched page looks like an unrendered JavaScript application shell — almost no extractable text plus a `<script>` tag, confirmed by an SPA mount point (`id="root"`, `id="app"`, `id="__next"`, ...) or a `<noscript>` "enable JavaScript" message — ctxpack refuses to emit near-empty content and exits with code `3`:
+When a fetched page looks like an unrendered JavaScript application shell — almost no extractable text plus a `<script>` tag, confirmed by an SPA mount point (`id="root"`, `id="app"`, `id="__next"`, `id="___gatsby"`, `data-reactroot`, `ng-app`) or a `<noscript>` "enable JavaScript" message — ctxpack refuses to emit near-empty content and exits with code `3`:
 
 ```text
 ctxpack: page appears to require JavaScript rendering; no extractable main content: https://app.example.com
@@ -234,6 +234,8 @@ Two ways to handle it:
    ```
 
 Detection only applies to URLs fetched by ctxpack itself, and it is heuristic: a page that server-renders some content but lazy-loads the rest still packs normally.
+
+Compatibility note: before this check existed (v0.3.x and earlier), such pages packed into near-empty content with exit `0`. Scripts that treated every exit `0` as usable content should now also handle exit `3`.
 
 ## Design principles
 
