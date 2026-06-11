@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/atani/ctxpack/compare/ctxpack-v0.3.0...ctxpack-v0.4.0) (2026-06-11)
+
+
+### Features
+
+* detect JS-required pages and exit 3 with a rendering hint ([#19](https://github.com/atani/ctxpack/issues/19)) ([655df98](https://github.com/atani/ctxpack/commit/655df98233f9a5d7f46c56ddbe47339afb08a12b))
+
+
+### Bug Fixes
+
+* **winget:** add required schema header to manifest templates ([#17](https://github.com/atani/ctxpack/issues/17)) ([4b8a9ea](https://github.com/atani/ctxpack/commit/4b8a9eab2a81151159f08a25f0a8aedda2a34faf))
+
 ## [0.3.0](https://github.com/atani/ctxpack/compare/ctxpack-v0.2.0...ctxpack-v0.3.0) (2026-06-10)
 
 

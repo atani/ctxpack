@@ -39,6 +39,36 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(b)
 }
 
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func serveJSShell(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<html><head><title>App</title></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div><script src="/main.js"></script></body></html>`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func fixturePath() string { return filepath.Join("..", "..", "tests", "fixture.html") }
 
 func TestRunVersionFlagPrintsVersion(t *testing.T) {
@@ -117,6 +147,45 @@ func TestRunHTTPErrorStatusReturns1(t *testing.T) {
 	defer srv.Close()
 	if code := run([]string{srv.URL, "--no-record"}); code != 1 {
 		t.Fatalf("code = %d", code)
+	}
+}
+
+func TestRunJSRequiredPageReturns3WithHint(t *testing.T) {
+	isolateHome(t)
+	srv := serveJSShell(t)
+	var code int
+	stderr := captureStderr(t, func() { code = run([]string{srv.URL, "--no-record"}) })
+	if code != 3 {
+		t.Fatalf("code = %d, want 3 (stderr: %s)", code, stderr)
+	}
+	if !strings.Contains(stderr, "JavaScript rendering") || !strings.Contains(stderr, "--dump-dom") || !strings.Contains(stderr, "'"+srv.URL+"'") {
+		t.Fatalf("stderr missing hint: %q", stderr)
+	}
+}
+
+func TestRunJSRequiredJSONKeepsStdoutEmpty(t *testing.T) {
+	isolateHome(t)
+	srv := serveJSShell(t)
+	var code int
+	out := captureStdout(t, func() {
+		_ = captureStderr(t, func() { code = run([]string{srv.URL, "--json", "--no-record"}) })
+	})
+	if code != 3 {
+		t.Fatalf("code = %d, want 3", code)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty so JSON consumers cannot misread a failure", out)
+	}
+}
+
+func TestHintURLFallsBackOnShellUnsafeURLs(t *testing.T) {
+	if got := hintURL("https://example.com/docs"); got != "'https://example.com/docs'" {
+		t.Fatalf("hintURL = %q", got)
+	}
+	for _, unsafe := range []string{"https://x/a'b", "https://x/a\nb", "https://x/a\x7fb"} {
+		if got := hintURL(unsafe); got != "URL" {
+			t.Fatalf("hintURL(%q) = %q, want placeholder", unsafe, got)
+		}
 	}
 }
 
