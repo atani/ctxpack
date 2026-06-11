@@ -157,6 +157,7 @@ ctxpack reset --yes
 - `0` — 成功。
 - `1` — ネットワーク障害やレスポンスサイズ超過などの実行時エラー（リトライ可能）。
 - `2` — 使い方エラーや入力ファイルが存在しない（リトライ不可）。
+- `3` — 取得したページが JavaScript レンダリングを必要としている（ctxpack 単体ではリトライ不可。[JavaScript レンダリングが必要なページ](#javascript-レンダリングが必要なページ)を参照）。
 
 ## 仕組み
 
@@ -198,12 +199,41 @@ ctxpack reset --yes
 
 CtxPack 0.x は静的な HTML / Markdown コンテンツを対象としています。現時点でのスコープ外。
 
-- JavaScript レンダリングが必要なページ（SPA、遅延読み込みコンテンツ）
+- JavaScript レンダリングが必要なページ（SPA、遅延読み込みコンテンツ）— 検知して終了コード `3` で報告します。[JavaScript レンダリングが必要なページ](#javascript-レンダリングが必要なページ)を参照
 - Bot 対策 / CAPTCHA
 - ログインが必要なコンテンツ
 - PDF・DOCX などのバイナリ形式（事前に HTML / Markdown に変換してください）
 
 標準入力での HTML と Markdown の判定は山括弧の有無で自動検出します。確実に形式を指定したい場合は `.md` / `.html` ファイルパスを渡してください。
+
+### JavaScript レンダリングが必要なページ
+
+取得したページが未レンダリングの JavaScript アプリケーションのシェルに見える場合（抽出できるテキストがほぼ無い + `<script>` タグがあり、SPA のマウントポイント（`id="root"`, `id="app"`, `id="__next"`, `id="___gatsby"`, `data-reactroot`, `ng-app`）や `<noscript>` の「JavaScript を有効にしてください」メッセージで確認できる場合）、CtxPack はほぼ空のコンテンツを出力する代わりに終了コード `3` で終了します。
+
+```text
+ctxpack: page appears to require JavaScript rendering; no extractable main content: https://app.example.com
+hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --dump-dom 'https://app.example.com' | ctxpack -`, or fall back to a JavaScript-capable fetcher.
+```
+
+対処方法は 2 つあります。
+
+1. **レンダリング済み DOM をパイプで渡す。** ローカルファイルと標準入力はレンダリング済みとして扱われるため、クリーニングのパイプラインはそのまま適用されます。
+
+   ```bash
+   chrome --headless=new --dump-dom 'https://app.example.com' | ctxpack -
+   ```
+
+   （`chrome` は環境により `google-chrome` / `chromium`、macOS では `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"` になります。）
+
+2. **呼び出し側でフォールバックする。** エージェントやフックは終了コード `3`（または非ゼロ終了）を見て、JavaScript を実行できる自前のフェッチツールに切り替えられます。
+
+   ```bash
+   ctxpack "$url" --json || your-fetch-tool "$url"
+   ```
+
+この検知は CtxPack 自身が取得した URL にのみ適用され、ヒューリスティックです。一部をサーバーサイドレンダリングし残りを遅延読み込みするページは、通常どおりパックされます。
+
+互換性に関する注記：この検知が入る前（v0.3.x 以前）は、こうしたページはほぼ空のコンテンツ + 終了コード `0` でパックされていました。終了コード `0` を「使えるコンテンツが得られた」とみなしていたスクリプトは、終了コード `3` も扱うようにしてください。
 
 ## ロードマップ
 
