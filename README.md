@@ -159,6 +159,7 @@ Exit codes:
 - `0` — success.
 - `1` — runtime error such as a network failure or an oversized response (often retriable).
 - `2` — usage error or missing input file (not retriable).
+- `3` — the fetched page appears to require JavaScript rendering (not retriable with ctxpack alone; see [JavaScript-rendered pages](#javascript-rendered-pages)).
 
 ## How it works
 
@@ -198,14 +199,41 @@ This is designed for relative before/after comparison. Absolute numbers will dif
 
 ## Limitations
 
-CtxPack 0.1 targets static HTML/Markdown content. Out of scope for now:
+CtxPack targets static HTML/Markdown content. Out of scope for now:
 
-- JavaScript-rendered pages (single-page apps, lazy-loaded content).
+- JavaScript-rendered pages (single-page apps, lazy-loaded content) — detected and reported with exit code `3`, see [JavaScript-rendered pages](#javascript-rendered-pages).
 - Heavy bot protection / CAPTCHA pages.
 - Login-only content.
 - PDF, DOCX, and other binary formats (pre-convert to HTML/Markdown).
 
 For HTML vs. Markdown on stdin, the format is auto-detected by the presence of angle brackets; pass a `.md`/`.html` file path when you need deterministic handling.
+
+### JavaScript-rendered pages
+
+When a fetched page looks like an unrendered JavaScript application shell — almost no extractable text plus a `<script>` tag, confirmed by an SPA mount point (`id="root"`, `id="app"`, `id="__next"`, ...) or a `<noscript>` "enable JavaScript" message — ctxpack refuses to emit near-empty content and exits with code `3`:
+
+```text
+ctxpack: page appears to require JavaScript rendering; no extractable main content: https://app.example.com
+hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --dump-dom 'https://app.example.com' | ctxpack -`, or fall back to a JavaScript-capable fetcher.
+```
+
+Two ways to handle it:
+
+1. **Pipe a rendered DOM into ctxpack.** Local files and stdin are trusted as already rendered, so the full cleaning pipeline still applies:
+
+   ```bash
+   chrome --headless=new --dump-dom 'https://app.example.com' | ctxpack -
+   ```
+
+   (`chrome` may be `google-chrome`, `chromium`, or on macOS `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`.)
+
+2. **Fall back in the caller.** Agents and hooks can key on exit code `3` (or any non-zero exit) and switch to their own JavaScript-capable fetch tool:
+
+   ```bash
+   ctxpack "$url" --json || your-fetch-tool "$url"
+   ```
+
+Detection only applies to URLs fetched by ctxpack itself, and it is heuristic: a page that server-renders some content but lazy-loads the rest still packs normally.
 
 ## Design principles
 

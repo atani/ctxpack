@@ -255,6 +255,85 @@ func bytesOfSize(n int) []byte {
 	return b
 }
 
+const spaShellHTML = `<!doctype html><html><head><title>My App</title></head><body>
+<noscript>You need to enable JavaScript to run this app.</noscript>
+<div id="root"></div>
+<script src="/static/js/main.js"></script>
+</body></html>`
+
+func serveHTML(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestPackRejectsRemoteJSShell(t *testing.T) {
+	srv := serveHTML(t, spaShellHTML)
+	_, err := Pack(srv.URL, nil, strings.NewReader(""))
+	var jsErr *JSRequiredError
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("err = %v, want *JSRequiredError", err)
+	}
+	if jsErr.URL != srv.URL {
+		t.Fatalf("jsErr.URL = %q, want %q", jsErr.URL, srv.URL)
+	}
+}
+
+func TestPackRejectsRemoteShellWithMountPointAndSomeText(t *testing.T) {
+	// Between the bare-shell and never-flag thresholds: a loading message
+	// alone is not enough, but the SPA mount point confirms the shell.
+	srv := serveHTML(t, `<html><head><title>App</title></head><body>
+<p>Loading the application. Please wait while the interface starts up.</p>
+<div id="root"></div>
+<script src="/app.js"></script>
+</body></html>`)
+	_, err := Pack(srv.URL, nil, strings.NewReader(""))
+	var jsErr *JSRequiredError
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("err = %v, want *JSRequiredError", err)
+	}
+}
+
+func TestPackKeepsShortStaticPageWithoutScripts(t *testing.T) {
+	srv := serveHTML(t, `<html><head><title>Hi</title></head><body><p>Short note.</p></body></html>`)
+	result, err := Pack(srv.URL, nil, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "Short note.") {
+		t.Fatalf("content = %q", result.Content)
+	}
+}
+
+func TestPackKeepsArticleWithScriptsAndMountPoint(t *testing.T) {
+	long := strings.Repeat("Plenty of real readable article text here. ", 10)
+	srv := serveHTML(t, `<html><body><div id="root"><p>`+long+`</p></div><script src="/a.js"></script></body></html>`)
+	result, err := Pack(srv.URL, nil, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "Plenty of real readable article text") {
+		t.Fatalf("content = %q", result.Content)
+	}
+}
+
+func TestPackTrustsLocalFileAndStdinAsRendered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shell.html")
+	if err := os.WriteFile(path, []byte(spaShellHTML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Pack(path, nil, strings.NewReader("")); err != nil {
+		t.Fatalf("local file: %v", err)
+	}
+	if _, err := Pack("-", nil, strings.NewReader(spaShellHTML)); err != nil {
+		t.Fatalf("stdin: %v", err)
+	}
+}
+
 func TestFetchURLRejectsHTTPErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "<html><body>not found page</body></html>", http.StatusNotFound)

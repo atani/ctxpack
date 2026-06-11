@@ -120,6 +120,37 @@ func TestRunHTTPErrorStatusReturns1(t *testing.T) {
 	}
 }
 
+func TestRunJSRequiredPageReturns3WithHint(t *testing.T) {
+	isolateHome(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<html><head><title>App</title></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div><script src="/main.js"></script></body></html>`)
+	}))
+	defer srv.Close()
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	code := run([]string{srv.URL, "--no-record"})
+	os.Stderr = origStderr
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 3 {
+		t.Fatalf("code = %d, want 3 (stderr: %s)", code, b)
+	}
+	stderr := string(b)
+	if !strings.Contains(stderr, "JavaScript rendering") || !strings.Contains(stderr, "--dump-dom") || !strings.Contains(stderr, srv.URL) {
+		t.Fatalf("stderr missing hint: %q", stderr)
+	}
+}
+
 func TestRunUnreachableHostReturns1(t *testing.T) {
 	isolateHome(t)
 	// Port 1 on localhost refuses connections, exercising the net.Error

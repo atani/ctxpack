@@ -36,6 +36,14 @@ Flags:
   -o, --output FILE  Write output to a file instead of stdout
   --version      Show version
   -h, --help     Show this help
+
+Exit codes:
+  0  success
+  1  network or runtime error (often retriable)
+  2  usage error or missing input file
+  3  page appears to require JavaScript rendering; render it first
+     (e.g. chrome --headless=new --dump-dom URL | ctxpack -) or fall
+     back to a JavaScript-capable fetcher
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -238,16 +246,24 @@ func parse(argv []string) (options, []string, error) {
 	return opts, args, nil
 }
 
-// classifyError maps failures to the Python CLI's exit codes: 2 for a missing
-// file (usage-level error), 1 for network problems (printed as retriable,
-// HTTP error statuses included) and everything else.
+// classifyError maps failures to exit codes: 2 for a missing file
+// (usage-level error), 3 for pages that appear to require JavaScript
+// rendering (not retriable with ctxpack alone), 1 for network problems
+// (printed as retriable, HTTP error statuses included) and everything else.
+// Codes 1 and 2 match the Python CLI.
 func classifyError(err error) int {
 	var pathErr *fs.PathError
 	var netErr net.Error
 	var statusErr *ctxpack.HTTPStatusError
+	var jsErr *ctxpack.JSRequiredError
 	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "ctxpack: file not found: %s\n", pathErr.Path)
 		return 2
+	}
+	if errors.As(err, &jsErr) {
+		fmt.Fprintf(os.Stderr, "ctxpack: %v\n", err)
+		fmt.Fprintf(os.Stderr, "hint: render the page first and pipe the DOM in, e.g. `chrome --headless=new --dump-dom '%s' | ctxpack -`, or fall back to a JavaScript-capable fetcher.\n", jsErr.URL)
+		return 3
 	}
 	if errors.As(err, &netErr) || errors.As(err, &statusErr) {
 		fmt.Fprintf(os.Stderr, "ctxpack: network error (retriable): %v\n", err)
