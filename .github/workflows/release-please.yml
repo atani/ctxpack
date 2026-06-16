@@ -22,6 +22,13 @@ jobs:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
+          # Open the release PR with an existing PAT instead of GITHUB_TOKEN.
+          # PRs opened with GITHUB_TOKEN do not trigger other workflows, so the
+          # CI checks never run and the release PR stays blocked on its required
+          # checks (which enforce_admins makes unbypassable). RELEASE_PLEASE_TOKEN
+          # is not configured in this repo; HOMEBREW_TAP_GITHUB_TOKEN is the
+          # existing PAT, so reuse it here.
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .release-please-manifest.json
 

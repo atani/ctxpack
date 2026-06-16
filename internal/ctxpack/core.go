@@ -63,6 +63,15 @@ var (
 	wordRe        = regexp.MustCompile(`[\p{L}\p{N}_]+`)
 	inlineSpaceRe = regexp.MustCompile(`[\s\p{Z}\x{85}]+`)
 	headingLineRe = regexp.MustCompile(`^#{1,6} `)
+	// jsMountRe and noscriptJSRe are signals that a thin page is an
+	// unrendered JavaScript application shell rather than a short static
+	// page: a well-known SPA mount point, or a <noscript> fallback telling
+	// the visitor to enable JavaScript.
+	jsMountRe    = regexp.MustCompile(`(?i)\bid\s*=\s*["']?(root|app|__next|___gatsby)["'\s>]|data-reactroot|\bng-app\b`)
+	noscriptJSRe = regexp.MustCompile(`(?is)<noscript\b[^>]*>.*?javascript.*?</noscript>`)
+	// scriptTagRe requires a real tag boundary so text like "<scripture"
+	// cannot count as a script tag.
+	scriptTagRe = regexp.MustCompile(`(?i)<script[\s>]`)
 )
 
 // TokenStats reports the token estimates before and after packing one source.
@@ -160,6 +169,48 @@ func newStats(raw, clean, final string) TokenStats {
 		SavedTokens:      saved,
 		ReductionPercent: reductionPercent(saved, rawT),
 	}
+}
+
+// JSRequiredError reports a fetched page that appears to be an unrendered
+// JavaScript application shell, meaning ctxpack cannot extract main content
+// from it. The CLI maps it to exit code 3 so callers can fall back to a
+// JavaScript-capable fetcher (headless browser, agent-native fetch tool).
+type JSRequiredError struct {
+	URL string
+}
+
+func (e *JSRequiredError) Error() string {
+	return "page appears to require JavaScript rendering; no extractable main content: " + e.URL
+}
+
+// Thresholds for looksJSRequired. Variables (not constants) so tests can
+// exercise the boundaries without crafting size-exact fixtures.
+var (
+	// JSRequiredMaxCleanRunes is the extracted-text size above which a page
+	// is never treated as a JS shell.
+	JSRequiredMaxCleanRunes = 200
+	// JSRequiredBareShellRunes is the extracted-text size below which a page
+	// containing scripts is treated as a JS shell even without SPA markers.
+	JSRequiredBareShellRunes = 40
+)
+
+// looksJSRequired reports whether HTML that produced almost no extractable
+// text looks like an unrendered JavaScript application shell. Every path
+// requires a <script> tag plus thin extracted text; SPA mount points or a
+// noscript "enable JavaScript" message confirm mid-size shells, while a
+// near-empty body with scripts is flagged on its own.
+func looksJSRequired(raw, clean string) bool {
+	cleanRunes := len([]rune(clean))
+	if cleanRunes >= JSRequiredMaxCleanRunes {
+		return false
+	}
+	if !scriptTagRe.MatchString(raw) {
+		return false
+	}
+	if cleanRunes < JSRequiredBareShellRunes {
+		return true
+	}
+	return jsMountRe.MatchString(raw) || noscriptJSRe.MatchString(raw)
 }
 
 // HTTPStatusError reports a non-success HTTP response. The CLI treats it as a
@@ -485,10 +536,18 @@ func Pack(source string, query *string, stdin io.Reader) (PackResult, error) {
 	}
 	var title *string
 	var clean string
-	if strings.Contains(raw, "<") && strings.Contains(raw, ">") {
+	isHTML := strings.Contains(raw, "<") && strings.Contains(raw, ">")
+	if isHTML {
 		title, clean = HTMLToMarkdown(raw)
 	} else {
 		clean = NormalizeText(raw)
+	}
+	// Only remote pages are checked for unrendered JS shells: local files and
+	// stdin are trusted as already rendered (e.g. piped from a headless
+	// browser), so the fallback pipe in JSRequiredError's hint stays usable.
+	isRemote := strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")
+	if isHTML && isRemote && looksJSRequired(raw, clean) {
+		return PackResult{}, &JSRequiredError{URL: sourceURL}
 	}
 	final := ApplyQuery(clean, query)
 	return PackResult{SourceURL: sourceURL, Title: title, FetchedAt: time.Now().UTC().Format(time.RFC3339Nano), Content: final, Stats: newStats(raw, clean, final), Query: query}, nil
